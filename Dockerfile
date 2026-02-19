@@ -5,6 +5,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install git if not present
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
+# Remove torchvision/torchaudio (not needed for text, causes conflicts with newer transformers)
+RUN pip uninstall -y torchvision torchaudio || true
+
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
