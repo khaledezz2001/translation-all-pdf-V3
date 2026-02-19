@@ -1,4 +1,4 @@
-torch==2.8.0
+# torch is already in the base image (2.8.0+cu128) — do NOT reinstall from PyPI
 transformers>=4.45.0
 huggingface_hub>=0.20.3
 accelerate>=0.26.1
