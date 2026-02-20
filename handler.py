@@ -15,7 +15,7 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 # =====================================================
-# Single model path — Qwen 2.5 14B Instruct
+# Single model path — OpenPipe/Qwen3-14B-Instruct
 # =====================================================
 MODEL_PATH = "/models/hf/qwen"
 
@@ -54,14 +54,14 @@ TRANSLATE_SYSTEM_PROMPT = (
 
 
 # =====================================================
-# Load single Qwen 2.5-14B model
+# Load single Qwen3-14B model
 # =====================================================
 def load_model():
     global model_tokenizer, model
     if model is not None:
         return
 
-    log("Loading Qwen-2.5-14B-Instruct (FP16)")
+    log("Loading OpenPipe/Qwen3-14B-Instruct (FP16)")
 
     model_tokenizer = AutoTokenizer.from_pretrained(
         MODEL_PATH,
@@ -161,7 +161,7 @@ def translate_text(text: str) -> str:
             prompt,
             return_tensors="pt",
             truncation=True,
-            max_length=8192
+            max_length=16384  # Qwen3 supports 32K native context
         ).to(model.device)
 
         with torch.no_grad():
@@ -180,7 +180,8 @@ def translate_text(text: str) -> str:
         new_tokens = output[0][inputs['input_ids'].shape[1]:]
         decoded = model_tokenizer.decode(new_tokens, skip_special_tokens=True)
 
-        # Clean up any remaining special tokens
+        # Clean up think tags and any remaining special tokens
+        decoded = re.sub(r"<think>.*?</think>", "", decoded, flags=re.DOTALL).strip()
         decoded = re.sub(r"<\|.*?\|>", "", decoded).strip()
 
         translated_chunks.append(decoded)
@@ -294,7 +295,7 @@ def summarize_all_pages(pages, max_words: int, system_prompt: str):
         prompt,
         return_tensors="pt",
         truncation=True,
-        max_length=12288  # 14B model supports longer context
+        max_length=24576  # Qwen3 supports 32K native context
     ).to(model.device)
 
     log(f"Input tokens: {inputs['input_ids'].shape[1]}")
@@ -319,10 +320,9 @@ def summarize_all_pages(pages, max_words: int, system_prompt: str):
 
     log(f"Decoded summary length: {len(decoded)} chars, {len(decoded.split())} words")
 
-    # Clean up
+    # Clean up think tags and special tokens
     decoded = decoded.strip()
-
-    # Remove any remaining special tokens
+    decoded = re.sub(r"<think>.*?</think>", "", decoded, flags=re.DOTALL).strip()
     decoded = re.sub(r"<\|.*?\|>", "", decoded).strip()
 
     # Limit to max words
