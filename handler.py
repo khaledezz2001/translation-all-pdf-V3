@@ -6,6 +6,7 @@ import runpod
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
+    BitsAndBytesConfig,
 )
 
 # =====================================================
@@ -61,7 +62,7 @@ def load_model():
     if model is not None:
         return
 
-    log("Loading OpenPipe/Qwen3-14B-Instruct (FP16)")
+    log("Loading OpenPipe/Qwen3-14B-Instruct (4-bit NF4)")
 
     model_tokenizer = AutoTokenizer.from_pretrained(
         MODEL_PATH,
@@ -69,9 +70,17 @@ def load_model():
         trust_remote_code=True
     )
 
+    # 4-bit quantization to fit in RTX 5090 (32GB VRAM)
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_PATH,
-        torch_dtype=torch.float16,
+        quantization_config=quantization_config,
         device_map="auto",
         local_files_only=True,
         trust_remote_code=True
