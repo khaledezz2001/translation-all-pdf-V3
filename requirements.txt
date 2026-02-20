@@ -1,7 +1,6 @@
-# torch is already in the base image (2.8.0+cu128) — do NOT reinstall from PyPI
+# torch is already in the base image (2.4.0+cu124) — do NOT reinstall from PyPI
 transformers>=4.51.0
 huggingface_hub>=0.20.3
 accelerate>=0.26.1
-bitsandbytes>=0.43.0
 runpod==1.6.2
 pillow>=10.2.0
