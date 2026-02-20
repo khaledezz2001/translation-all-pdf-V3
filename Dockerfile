@@ -11,11 +11,11 @@ RUN pip uninstall -y torchvision torchaudio || true
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
-# Download Qwen 2.5 14B Instruct (single model for both translation & summary)
+# Download OpenPipe/Qwen3-14B-Instruct (single model for both translation & summary)
 RUN python3 - <<EOF
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="Qwen/Qwen2.5-14B-Instruct",
+    repo_id="OpenPipe/Qwen3-14B-Instruct",
     local_dir="/models/hf/qwen",
     local_dir_use_symlinks=False
 )
