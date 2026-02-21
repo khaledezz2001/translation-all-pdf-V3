@@ -196,6 +196,20 @@ def translate_text(text: str) -> str:
         decoded = re.sub(r"<think>.*?</think>", "", decoded, flags=re.DOTALL).strip()
         decoded = re.sub(r"<\|.*?\|>", "", decoded).strip()
 
+        # Remove echoed system prompt if model regurgitated instructions
+        for marker in ["STRICT RULES:", "LEGAL TRANSLATION STANDARDS:"]:
+            if marker in decoded:
+                idx = decoded.find(marker)
+                after = decoded[idx:]
+                lines = after.split("\n")
+                # Find last instruction-like line (starts with "- ")
+                last_rule = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith("- "):
+                        last_rule = i
+                # Keep only content after the instruction block
+                decoded = "\n".join(lines[last_rule + 1:]).strip()
+
         translated_chunks.append(decoded)
 
     return "\n".join(translated_chunks)
