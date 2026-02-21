@@ -171,6 +171,7 @@ def translate_text(text: str) -> str:
                 do_sample=False,
                 temperature=None,
                 top_p=None,
+                top_k=None,
                 use_cache=True,
                 pad_token_id=model_tokenizer.pad_token_id,
                 eos_token_id=model_tokenizer.eos_token_id
@@ -258,11 +259,20 @@ def summarize_all_pages(pages, max_words: int, system_prompt: str):
         log("ERROR: No valid text found for summary")
         return ""
 
-    log(f"Full text length: {len(full_text)} chars, {len(full_text.split())} words")
+    doc_word_count = len(full_text.split())
+    log(f"Full text length: {len(full_text)} chars, {doc_word_count} words")
+
+    # Smart word limit: scale target based on document length
+    # Prevents hallucination on short documents
+    actual_target = max(50, min(max_words, doc_word_count // 3))
+    if actual_target < max_words:
+        log(f"Smart limit: requested {max_words} words, but document is only {doc_word_count} words → target adjusted to {actual_target}")
+    else:
+        log(f"Target: {actual_target} words (document is long enough)")
 
     # Build messages for Qwen with word count instruction
     user_content = (
-        f"Summarize the following document in approximately {max_words} words. "
+        f"Summarize the following document in approximately {actual_target} words. "
         f"Make sure to complete all sentences properly.\n\n"
         f"DOCUMENT:\n{full_text}"
     )
@@ -303,10 +313,11 @@ def summarize_all_pages(pages, max_words: int, system_prompt: str):
     with torch.no_grad():
         output = model.generate(
             **inputs,
-            max_new_tokens=min(max_words * 5, 4096),
+            max_new_tokens=min(actual_target * 5, 4096),
             do_sample=False,
             temperature=None,
             top_p=None,
+            top_k=None,
             use_cache=True,
             pad_token_id=model_tokenizer.pad_token_id,
             eos_token_id=model_tokenizer.eos_token_id
@@ -326,7 +337,7 @@ def summarize_all_pages(pages, max_words: int, system_prompt: str):
     decoded = re.sub(r"<\|.*?\|>", "", decoded).strip()
 
     # Limit to max words
-    result = limit_words(decoded, max_words)
+    result = limit_words(decoded, actual_target)
 
     log(f"Final summary: {len(result)} chars, {len(result.split())} words")
 
