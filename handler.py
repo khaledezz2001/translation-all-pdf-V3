@@ -40,58 +40,65 @@ DEFAULT_SUMMARY_PROMPT = (
     "- Write in neutral legal English\n\n"
 )
 
-TRANSLATE_SYSTEM_PROMPT = (
-    "You are a certified legal translator specializing in Russian-to-English legal documents.\n"
-    "Translate the following text from Russian to English.\n"
-    "STRICT RULES:\n"
-    "- Translate ONLY — do NOT summarize, paraphrase, or add commentary\n"
-    "- Preserve the original meaning, tone, and structure as closely as possible\n"
-    "- Keep proper nouns, names, dates, and numbers unchanged\n"
-    "- Preserve paragraph breaks and line structure\n"
-    "- If a word or phrase is already in English, keep it as-is\n"
-    "- Output ONLY the English translation, nothing else\n"
-    "TRANSLITERATION RULES (CRITICAL):\n"
-    "- Use phonetic transliteration that matches the Cyrillic spelling letter-by-letter\n"
-    "- Complete mapping: А→A, Б→B, В→V, Г→G, Д→D, Е→E, Ё→Yo, Ж→Zh, З→Z, "
-    "И→I, Й→Y, К→K, Л→L, М→M, Н→N, О→O, П→P, Р→R, С→S, Т→T, "
-    "У→U, Ф→F, Х→Kh, Ц→Ts, Ч→Ch, Ш→Sh, Щ→Shch, Ъ→(omit), Ы→Y, Ь→(omit), Э→E, Ю→Yu, Я→Ya\n"
-    "- 'Кс' in Russian names → 'Ks'. Example: Ксенофонтов → Ksenofontov (NOT Xenofontov)\n"
-    "- BUT if a Cyrillic name is a phonetic rendering of a known foreign name, restore the original spelling. "
-    "Example: КСАВЬЕР → XAVIER (NOT KSAVIER)\n"
-    "- 'Е' → always 'E' (NEVER 'I'). Example: ГРИСЕН → GRISEN (NOT GRISIN)\n"
-    "- Company names in Cyrillic are phonetic transcriptions — transliterate them back faithfully\n"
-    "- For foreign place names, streets, and districts written phonetically in Cyrillic, "
-    "ALWAYS restore the official English name — do NOT transliterate.\n"
-    "HONG KONG: Сёнвань → Sheung Wan, Коулун → Kowloon, Цим Ша Цуй → Tsim Sha Tsui, "
-    "Бонэм Стрэнд → Bonham Strand, Ванчай → Wan Chai, Монгкок → Mong Kok, "
-    "Централ → Central, Абердин → Aberdeen, Чайвань → Chai Wan, Куорри Бей → Quarry Bay\n"
-    "UAE: Дубай → Dubai, Абу-Даби → Abu Dhabi, Шарджа → Sharjah, "
-    "Джебел Али → Jebel Ali, Дейра → Deira, Бур Дубай → Bur Dubai, "
-    "Аджман → Ajman, Рас-эль-Хайма → Ras Al Khaimah, Фуджейра → Fujairah\n"
-    "UK: Лондон → London, Вестминстер → Westminster, Кэнэри Уорф → Canary Wharf, "
-    "Эдинбург → Edinburgh, Манчестер → Manchester, Бирмингем → Birmingham\n"
-    "CYPRUS: Никосия → Nicosia, Лимассол → Limassol, Ларнака → Larnaca, Пафос → Paphos\n"
-    "SINGAPORE: Сингапур → Singapore, Раффлз Плейс → Raffles Place\n"
-    "BVI: Тортола → Tortola, Род Таун → Road Town\n"
-    "SEYCHELLES: Маэ → Mahe, Виктория → Victoria, Праслин → Praslin\n"
-    "OTHER: Панама → Panama, Белиз → Belize, Гибралтар → Gibraltar, "
-    "Лихтенштейн → Liechtenstein, Люксембург → Luxembourg, Мальта → Malta, "
-    "Каймановы острова → Cayman Islands, Бермуды → Bermuda\n"
-    "COMMON TERMS: Стрит/Стрэнд → Street/Strand, Билдинг → Building, "
-    "Башня/Тауэр → Tower, Авеню → Avenue, Плаза → Plaza, Роуд → Road\n"
-    "LEGAL TRANSLATION STANDARDS:\n"
-    "- Use formal legal English register: use 'shall' for obligations, 'hereby' for declarations\n"
-    "- Preserve civil law terminology: translate 'Цедент' as 'Cedent' (NOT 'Assignor'), "
-    "'Цессионарий' as 'Cessionary' (NOT 'Assignee')\n"
-    "- Translate 'Устав' as 'Articles of Association' (NOT 'Charter')\n"
-    "- Translate 'Договор цессии' as 'Conveyance Agreement' or 'Cession Agreement'\n"
-    "- Translate 'перевод долга' as 'debt transfer' (NOT 'debt assignment')\n"
-    "- Translate 'Договор о совместной деятельности' as 'Joint Operation Agreement' (NOT 'Joint Venture Agreement')\n"
-    "- Use standard English date format: 'October __, 2025' (NOT '_ October 2025')\n"
-    "- Maintain formal legal phrasing: 'represented by its director', 'acting under'\n"
-    "- Use 'such as' instead of 'for example' in legal clauses\n"
-    "- Use 'shall be' and 'shall become' for future obligations\n"
-)
+def build_translate_prompt(target_language: str) -> str:
+    """Build a translation system prompt for the given target language.
+    The model will auto-detect the source language."""
+    prompt = (
+        f"You are a certified professional legal translator.\n"
+        f"Auto-detect the language of the input text and translate it into {target_language}.\n"
+        f"STRICT RULES:\n"
+        f"- Translate ONLY — do NOT summarize, paraphrase, or add commentary\n"
+        f"- Preserve the original meaning, tone, and structure as closely as possible\n"
+        f"- Keep proper nouns, names, dates, and numbers unchanged\n"
+        f"- Preserve paragraph breaks and line structure\n"
+        f"- If a word or phrase is already in {target_language}, keep it as-is\n"
+        f"- Output ONLY the {target_language} translation, nothing else\n"
+        f"- Do NOT include any notes, explanations, or metadata about the translation\n"
+    )
+
+    # Add Cyrillic-specific transliteration rules (apply when source is Russian/Cyrillic)
+    prompt += (
+        "CYRILLIC TRANSLITERATION RULES (apply ONLY if source text contains Cyrillic script):\n"
+        "- Use phonetic transliteration that matches the Cyrillic spelling letter-by-letter\n"
+        "- Complete mapping: А→A, Б→B, В→V, Г→G, Д→D, Е→E, Ё→Yo, Ж→Zh, З→Z, "
+        "И→I, Й→Y, К→K, Л→L, М→M, Н→N, О→O, П→P, Р→R, С→S, Т→T, "
+        "У→U, Ф→F, Х→Kh, Ц→Ts, Ч→Ch, Ш→Sh, Щ→Shch, Ъ→(omit), Ы→Y, Ь→(omit), Э→E, Ю→Yu, Я→Ya\n"
+        "- 'Кс' in Russian names → 'Ks'. Example: Ксенофонтов → Ksenofontov (NOT Xenofontov)\n"
+        "- BUT if a Cyrillic name is a phonetic rendering of a known foreign name, restore the original spelling. "
+        "Example: КСАВЬЕР → XAVIER (NOT KSAVIER)\n"
+        "- 'Е' → always 'E' (NEVER 'I'). Example: ГРИСЕН → GRISEN (NOT GRISIN)\n"
+        "- Company names in Cyrillic are phonetic transcriptions — transliterate them back faithfully\n"
+        "- For foreign place names, streets, and districts written phonetically in Cyrillic, "
+        "ALWAYS restore the official English name — do NOT transliterate.\n"
+        "HONG KONG: Сёнвань → Sheung Wan, Коулун → Kowloon, Цим Ша Цуй → Tsim Sha Tsui, "
+        "Бонэм Стрэнд → Bonham Strand, Ванчай → Wan Chai, Монгкок → Mong Kok, "
+        "Централ → Central, Абердин → Aberdeen, Чайвань → Chai Wan, Куорри Бей → Quarry Bay\n"
+        "UAE: Дубай → Dubai, Абу-Даби → Abu Dhabi, Шарджа → Sharjah, "
+        "Джебел Али → Jebel Ali, Дейра → Deira, Бур Дубай → Bur Dubai, "
+        "Аджман → Ajman, Рас-эль-Хайма → Ras Al Khaimah, Фуджейра → Fujairah\n"
+        "UK: Лондон → London, Вестминстер → Westminster, Кэнэри Уорф → Canary Wharf, "
+        "Эдинбург → Edinburgh, Манчестер → Manchester, Бирмингем → Birmingham\n"
+        "CYPRUS: Никосия → Nicosia, Лимассол → Limassol, Ларнака → Larnaca, Пафос → Paphos\n"
+        "SINGAPORE: Сингапур → Singapore, Раффлз Плейс → Raffles Place\n"
+        "BVI: Тортола → Tortola, Род Таун → Road Town\n"
+        "SEYCHELLES: Маэ → Mahe, Виктория → Victoria, Праслин → Praslin\n"
+        "OTHER: Панама → Panama, Белиз → Belize, Гибралтар → Gibraltar, "
+        "Лихтенштейн → Liechtenstein, Люксембург → Luxembourg, Мальта → Malta, "
+        "Каймановы острова → Cayman Islands, Бермуды → Bermuda\n"
+        "COMMON TERMS: Стрит/Стрэнд → Street/Strand, Билдинг → Building, "
+        "Башня/Тауэр → Tower, Авеню → Avenue, Плаза → Plaza, Роуд → Road\n"
+    )
+
+    # Add legal translation standards
+    prompt += (
+        "LEGAL TRANSLATION STANDARDS:\n"
+        "- Use formal legal register in the target language\n"
+        "- Preserve civil law terminology accurately\n"
+        "- Maintain formal legal phrasing and tone\n"
+        "- Use standard date format for the target language\n"
+    )
+
+    return prompt
 
 
 # =====================================================
@@ -137,8 +144,8 @@ def is_layout_line(line: str) -> bool:
 # =====================================================
 # TRANSLATION — Using Qwen 14B
 # =====================================================
-def translate_text(text: str) -> str:
-    """Translate Russian text to English using Qwen 14B."""
+def translate_text(text: str, target_language: str = "English") -> str:
+    """Auto-detect source language and translate to target_language using Qwen 14B."""
     if not text or not text.strip():
         return text
 
@@ -180,8 +187,9 @@ def translate_text(text: str) -> str:
 
         log(f"Translating chunk {chunk_idx + 1}/{len(chunks)} ({len(stripped.split())} words)")
 
+        translate_prompt = build_translate_prompt(target_language)
         messages = [
-            {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
+            {"role": "system", "content": translate_prompt},
             {"role": "user", "content": stripped}
         ]
 
@@ -193,7 +201,7 @@ def translate_text(text: str) -> str:
             )
         except:
             prompt = (
-                f"<|im_start|>system\n{TRANSLATE_SYSTEM_PROMPT}<|im_end|>\n"
+                f"<|im_start|>system\n{translate_prompt}<|im_end|>\n"
                 f"<|im_start|>user\n{stripped}<|im_end|>\n"
                 f"<|im_start|>assistant\n"
             )
@@ -412,18 +420,19 @@ def handler(event):
     pages = input_data["pages"]
     max_words = int(input_data.get("n_words", 500))
     system_prompt = input_data.get("system_prompt", DEFAULT_SUMMARY_PROMPT)
+    target_language = input_data.get("target_language", "English")
 
-    log(f"Processing {len(pages)} pages, target: {max_words} words")
+    log(f"Processing {len(pages)} pages, target: {max_words} words, translate to: {target_language}")
 
     # Load single model
     load_model()
 
     # 1️⃣ Translate pages
-    log("Starting translation...")
+    log(f"Starting translation to {target_language}...")
     start = time.time()
     for i, p in enumerate(pages):
-        log(f"Translating page {i+1}/{len(pages)}")
-        p["text"] = translate_text(p["text"])
+        log(f"Translating page {i+1}/{len(pages)} to {target_language}")
+        p["text"] = translate_text(p["text"], target_language)
     log(f"Translation done in {time.time()-start:.2f}s")
 
     # 2️⃣ Summarize
