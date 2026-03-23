@@ -22,6 +22,9 @@ MODEL_PATH = "/models/hf/qwen"
 model_tokenizer = None
 model = None
 
+# Cached prompt token IDs to avoid re-tokenizing the system prompt every call
+_cached_translate_prompts = {}
+
 # =====================================================
 # Default system prompts
 # =====================================================
@@ -202,14 +205,42 @@ def build_translate_prompt(target_language: str) -> str:
 
 
 # =====================================================
-# Load single Qwen3-14B model
+# Load single Qwen3-14B model — auto-detects GPU caps
 # =====================================================
+def _detect_gpu_config():
+    """Detect GPU capabilities at runtime and return optimal dtype + device info."""
+    if not torch.cuda.is_available():
+        log("WARNING: No CUDA GPU detected, running on CPU (very slow)")
+        return torch.float32, "cpu"
+
+    gpu_name = torch.cuda.get_device_name(0)
+    capability = torch.cuda.get_device_capability(0)
+    vram_gb = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+
+    log(f"GPU detected: {gpu_name}")
+    log(f"  Compute capability: {capability[0]}.{capability[1]}")
+    log(f"  VRAM: {vram_gb:.1f} GB")
+
+    # BF16 support: Ampere (sm_80+) → A40, RTX A6000, A100, RTX 3090, etc.
+    # FP16 fallback: Turing (sm_75) and older → V100, T4, RTX 2080, etc.
+    if capability[0] >= 8:
+        dtype = torch.bfloat16
+        log(f"  Using BF16 (native support on {gpu_name})")
+    else:
+        dtype = torch.float16
+        log(f"  Using FP16 (BF16 not supported on {gpu_name})")
+
+    return dtype, gpu_name
+
+
 def load_model():
     global model_tokenizer, model
     if model is not None:
         return
 
-    log("Loading OpenPipe/Qwen3-14B-Instruct (FP16)")
+    dtype, gpu_name = _detect_gpu_config()
+
+    log(f"Loading OpenPipe/Qwen3-14B-Instruct ({dtype})")
 
     model_tokenizer = AutoTokenizer.from_pretrained(
         MODEL_PATH,
@@ -217,23 +248,45 @@ def load_model():
         trust_remote_code=True
     )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        local_files_only=True,
-        trust_remote_code=True
-    )
+    # Try to load with Flash Attention 2 for major speedup
+    # Works on both A40 and RTX A6000 (both Ampere, sm_86)
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_PATH,
+            torch_dtype=dtype,
+            device_map="auto",
+            local_files_only=True,
+            trust_remote_code=True,
+            attn_implementation="flash_attention_2"
+        )
+        log("Loaded with Flash Attention 2")
+    except Exception as e:
+        log(f"Flash Attention 2 not available ({e}), falling back to eager attention")
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_PATH,
+            torch_dtype=dtype,
+            device_map="auto",
+            local_files_only=True,
+            trust_remote_code=True,
+        )
 
     model.eval()
 
-    # Enable CUDA optimizations for H100
+    # Enable CUDA optimizations (TF32 supported on Ampere+)
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
 
-    log(f"Model loaded on device: {model.device}")
+    # Try torch.compile for additional speedup (PyTorch 2.x)
+    try:
+        model = torch.compile(model, mode="reduce-overhead")
+        log("torch.compile applied (reduce-overhead mode)")
+    except Exception as e:
+        log(f"torch.compile not available: {e}")
+
+    log(f"Model loaded on {gpu_name} | dtype={dtype} | "
+        f"device={model.device if hasattr(model, 'device') else 'multi-gpu'}")
 
 # =====================================================
 # Detect layout separators
@@ -242,55 +295,121 @@ def is_layout_line(line: str) -> bool:
     return bool(re.match(r"^[\-\._\s]{5,}$", line))
 
 # =====================================================
-# TRANSLATION — Using Qwen 14B
+# Build and cache the system prompt token IDs
 # =====================================================
-def translate_text(text: str, target_language: str = "English") -> str:
-    """Auto-detect source language and translate to target_language using Qwen 14B."""
-    if not text or not text.strip():
-        return text
+def get_translate_prefix_ids(target_language: str):
+    """Build the tokenized system prompt prefix once, and cache it."""
+    if target_language in _cached_translate_prompts:
+        return _cached_translate_prompts[target_language]
 
-    # Split text into manageable chunks (by paragraphs/lines)
-    # to avoid exceeding context length
-    lines = text.split("\n")
-    chunks = []
-    current_chunk = []
-    current_len = 0
+    translate_prompt = build_translate_prompt(target_language)
 
-    for line in lines:
-        line_len = len(line.split())
-        # Keep chunks under ~1500 words to leave room for translation output
-        if current_len + line_len > 1500 and current_chunk:
-            chunks.append("\n".join(current_chunk))
-            current_chunk = [line]
-            current_len = line_len
+    # Build the template with a placeholder for user content
+    messages = [
+        {"role": "system", "content": translate_prompt},
+    ]
+
+    try:
+        prefix = model_tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False
+        )
+    except:
+        prefix = f"<|im_start|>system\n{translate_prompt}<|im_end|>\n"
+
+    prefix_ids = model_tokenizer(prefix, return_tensors="pt", add_special_tokens=False)["input_ids"]
+    _cached_translate_prompts[target_language] = (translate_prompt, prefix_ids)
+    log(f"Cached translate prompt for '{target_language}': {prefix_ids.shape[1]} tokens")
+    return translate_prompt, prefix_ids
+
+
+# =====================================================
+# TRANSLATION — Optimized batch processing
+# =====================================================
+def translate_text_batch(texts: list, target_language: str = "English") -> list:
+    """Translate multiple texts (pages) efficiently by merging small pages
+    and minimizing inference calls."""
+    if not texts:
+        return texts
+
+    # Get cached system prompt
+    translate_prompt, _ = get_translate_prefix_ids(target_language)
+
+    # ---- Step 1: Merge small pages into larger chunks ----
+    # This reduces the number of inference calls dramatically
+    MERGE_WORD_LIMIT = 2500  # Qwen3 handles 32K context; we can go bigger
+    merged_chunks = []
+    current_pages = []
+    current_word_count = 0
+
+    for idx, text in enumerate(texts):
+        if not text or not text.strip():
+            # Track empty pages so we can map results back
+            if current_pages:
+                merged_chunks.append(current_pages)
+                current_pages = []
+                current_word_count = 0
+            merged_chunks.append([(idx, text, True)])  # True = skip (empty)
+            continue
+
+        word_count = len(text.split())
+
+        # If adding this page would exceed limit, flush current
+        if current_word_count + word_count > MERGE_WORD_LIMIT and current_pages:
+            merged_chunks.append(current_pages)
+            current_pages = []
+            current_word_count = 0
+
+        current_pages.append((idx, text, False))
+        current_word_count += word_count
+
+    if current_pages:
+        merged_chunks.append(current_pages)
+
+    log(f"Merged {len(texts)} pages into {len(merged_chunks)} inference calls")
+
+    # ---- Step 2: Translate each merged chunk ----
+    results = [""] * len(texts)
+
+    for chunk_idx, page_group in enumerate(merged_chunks):
+        # Check if this is a skip group
+        if len(page_group) == 1 and page_group[0][2]:
+            idx, text, _ = page_group[0]
+            results[idx] = text
+            continue
+
+        # Combine pages with clear separators
+        combined_parts = []
+        for idx, text, _ in page_group:
+            stripped = text.strip()
+            # Skip chunks with too few letter characters
+            if len(re.findall(r"[A-Za-zА-Яа-я]", stripped)) < 5:
+                results[idx] = text
+                continue
+            combined_parts.append((idx, stripped))
+
+        if not combined_parts:
+            continue
+
+        # If only one page, translate directly (no separators needed)
+        if len(combined_parts) == 1:
+            idx, stripped = combined_parts[0]
+            user_text = stripped
         else:
-            current_chunk.append(line)
-            current_len += line_len
+            # Use clear page separators
+            parts = []
+            for i, (idx, stripped) in enumerate(combined_parts):
+                parts.append(f"=== PAGE {i+1} ===\n{stripped}")
+            user_text = "\n\n".join(parts)
 
-    if current_chunk:
-        chunks.append("\n".join(current_chunk))
+        word_count = len(user_text.split())
+        log(f"Translating chunk {chunk_idx+1}/{len(merged_chunks)} "
+            f"({len(combined_parts)} pages, {word_count} words)")
 
-    translated_chunks = []
-
-    for chunk_idx, chunk in enumerate(chunks):
-        stripped = chunk.strip()
-
-        # Skip empty chunks
-        if not stripped:
-            translated_chunks.append(chunk)
-            continue
-
-        # Skip chunks with too few letter characters (likely just numbers/symbols)
-        if len(re.findall(r"[A-Za-zА-Яа-я]", stripped)) < 5:
-            translated_chunks.append(chunk)
-            continue
-
-        log(f"Translating chunk {chunk_idx + 1}/{len(chunks)} ({len(stripped.split())} words)")
-
-        translate_prompt = build_translate_prompt(target_language)
         messages = [
             {"role": "system", "content": translate_prompt},
-            {"role": "user", "content": stripped}
+            {"role": "user", "content": user_text}
         ]
 
         try:
@@ -302,7 +421,7 @@ def translate_text(text: str, target_language: str = "English") -> str:
         except:
             prompt = (
                 f"<|im_start|>system\n{translate_prompt}<|im_end|>\n"
-                f"<|im_start|>user\n{stripped}<|im_end|>\n"
+                f"<|im_start|>user\n{user_text}<|im_end|>\n"
                 f"<|im_start|>assistant\n"
             )
 
@@ -310,13 +429,17 @@ def translate_text(text: str, target_language: str = "English") -> str:
             prompt,
             return_tensors="pt",
             truncation=True,
-            max_length=16384  # Qwen3 supports 32K native context
+            max_length=24576
         ).to(model.device)
 
+        input_len = inputs['input_ids'].shape[1]
+        log(f"  Input tokens: {input_len}")
+
+        t0 = time.time()
         with torch.no_grad():
             output = model.generate(
                 **inputs,
-                max_new_tokens=4096,
+                max_new_tokens=min(word_count * 3, 8192),
                 do_sample=False,
                 temperature=None,
                 top_p=None,
@@ -326,31 +449,57 @@ def translate_text(text: str, target_language: str = "English") -> str:
                 eos_token_id=model_tokenizer.eos_token_id
             )
 
-        # Decode only new tokens
-        new_tokens = output[0][inputs['input_ids'].shape[1]:]
+        new_tokens = output[0][input_len:]
         decoded = model_tokenizer.decode(new_tokens, skip_special_tokens=True)
+        gen_time = time.time() - t0
+        gen_tokens = len(new_tokens)
+        log(f"  Generated {gen_tokens} tokens in {gen_time:.1f}s "
+            f"({gen_tokens/gen_time:.1f} tok/s)")
 
-        # Clean up think tags and any remaining special tokens
+        # Clean up think tags and special tokens
         decoded = re.sub(r"<think>.*?</think>", "", decoded, flags=re.DOTALL).strip()
         decoded = re.sub(r"<\|.*?\|>", "", decoded).strip()
 
         # Remove echoed system prompt if model regurgitated instructions
         for marker in ["STRICT RULES:", "LEGAL TRANSLATION STANDARDS:"]:
             if marker in decoded:
-                idx = decoded.find(marker)
-                after = decoded[idx:]
+                idx_m = decoded.find(marker)
+                after = decoded[idx_m:]
                 lines = after.split("\n")
-                # Find last instruction-like line (starts with "- ")
                 last_rule = 0
                 for i, line in enumerate(lines):
                     if line.strip().startswith("- "):
                         last_rule = i
-                # Keep only content after the instruction block
                 decoded = "\n".join(lines[last_rule + 1:]).strip()
 
-        translated_chunks.append(decoded)
+        # Map results back to individual pages
+        if len(combined_parts) == 1:
+            idx, _ = combined_parts[0]
+            results[idx] = decoded
+        else:
+            # Split by page separators
+            page_translations = re.split(r"===\s*PAGE\s+\d+\s*===", decoded)
+            # Remove empty first element if present
+            page_translations = [p.strip() for p in page_translations if p.strip()]
 
-    return "\n".join(translated_chunks)
+            for i, (idx, _) in enumerate(combined_parts):
+                if i < len(page_translations):
+                    results[idx] = page_translations[i]
+                else:
+                    # Fallback: if separator splitting failed, give remaining text
+                    # to the last page
+                    log(f"  WARNING: Could not split page {i+1}, using full output")
+                    results[idx] = decoded
+
+    return results
+
+
+def translate_text(text: str, target_language: str = "English") -> str:
+    """Auto-detect source language and translate to target_language using Qwen 14B.
+    Single-text wrapper around the batch function."""
+    result = translate_text_batch([text], target_language)
+    return result[0]
+
 
 # =====================================================
 # OCR cleanup
@@ -527,12 +676,13 @@ def handler(event):
     # Load single model
     load_model()
 
-    # 1️⃣ Translate pages
-    log(f"Starting translation to {target_language}...")
+    # 1️⃣ Translate pages — BATCH (all pages at once, merged into fewer calls)
+    log(f"Starting batch translation to {target_language}...")
     start = time.time()
+    page_texts = [p["text"] for p in pages]
+    translated_texts = translate_text_batch(page_texts, target_language)
     for i, p in enumerate(pages):
-        log(f"Translating page {i+1}/{len(pages)} to {target_language}")
-        p["text"] = translate_text(p["text"], target_language)
+        p["text"] = translated_texts[i]
     log(f"Translation done in {time.time()-start:.2f}s")
 
     # 2️⃣ Summarize
