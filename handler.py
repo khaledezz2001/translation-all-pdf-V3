@@ -278,12 +278,9 @@ def load_model():
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
 
-    # Try torch.compile for additional speedup (PyTorch 2.x)
-    try:
-        model = torch.compile(model, mode="reduce-overhead")
-        log("torch.compile applied (reduce-overhead mode)")
-    except Exception as e:
-        log(f"torch.compile not available: {e}")
+    # NOTE: torch.compile is NOT used here because model.generate() has
+    # dynamic sequence lengths which cause repeated recompilation, making
+    # inference slower, not faster.
 
     log(f"Model loaded on {gpu_name} | dtype={dtype} | "
         f"device={model.device if hasattr(model, 'device') else 'multi-gpu'}")
@@ -313,7 +310,8 @@ def get_translate_prefix_ids(target_language: str):
         prefix = model_tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=False
+            add_generation_prompt=False,
+            enable_thinking=False
         )
     except:
         prefix = f"<|im_start|>system\n{translate_prompt}<|im_end|>\n"
@@ -416,13 +414,14 @@ def translate_text_batch(texts: list, target_language: str = "English") -> list:
             prompt = model_tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
-                add_generation_prompt=True
+                add_generation_prompt=True,
+                enable_thinking=False
             )
         except:
             prompt = (
                 f"<|im_start|>system\n{translate_prompt}<|im_end|>\n"
                 f"<|im_start|>user\n{user_text}<|im_end|>\n"
-                f"<|im_start|>assistant\n"
+                f"<|im_start|>assistant\n/nothink\n"
             )
 
         inputs = model_tokenizer(
@@ -599,17 +598,18 @@ def summarize_all_pages(pages, max_words: int, system_prompt: str):
         prompt = model_tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True
+            add_generation_prompt=True,
+            enable_thinking=False
         )
-        log("Using chat template")
+        log("Using chat template (thinking disabled)")
     except:
         # Fallback to manual template
         prompt = (
             f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
             f"<|im_start|>user\n{user_content}<|im_end|>\n"
-            f"<|im_start|>assistant\n"
+            f"<|im_start|>assistant\n/nothink\n"
         )
-        log("Using manual template")
+        log("Using manual template (thinking disabled)")
 
     log(f"Prompt length: {len(prompt)} chars")
 
