@@ -11,6 +11,9 @@ RUN pip uninstall -y torchvision torchaudio || true
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
+# Install Flash Attention 2 for major speedup on A40
+RUN pip install --no-cache-dir flash-attn --no-build-isolation
+
 # Download OpenPipe/Qwen3-14B-Instruct (single model for both translation & summary)
 RUN python3 - <<EOF
 from huggingface_hub import snapshot_download
