@@ -215,7 +215,7 @@ def _detect_gpu_config():
 
     gpu_name = torch.cuda.get_device_name(0)
     capability = torch.cuda.get_device_capability(0)
-    vram_gb = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+    vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
 
     log(f"GPU detected: {gpu_name}")
     log(f"  Compute capability: {capability[0]}.{capability[1]}")
