@@ -5,16 +5,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install git if not present
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# Remove torchvision/torchaudio (not needed for text, causes conflicts with newer transformers)
+# Remove torchvision/torchaudio (not needed for text)
 RUN pip uninstall -y torchvision torchaudio || true
 
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 
-# Install Flash Attention 2 for major speedup on A40
-RUN pip install --no-cache-dir flash-attn --no-build-isolation
-
-# Download OpenPipe/Qwen3-14B-Instruct (single model for both translation & summary)
+# Download OpenPipe/Qwen3-14B-Instruct
 RUN python3 - <<EOF
 from huggingface_hub import snapshot_download
 snapshot_download(
@@ -29,6 +26,7 @@ ENV TRANSFORMERS_CACHE=/models/hf
 ENV HF_HUB_CACHE=/models/hf
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
+ENV VLLM_NO_USAGE_STATS=1
 
 WORKDIR /app
 COPY handler.py /app/handler.py
