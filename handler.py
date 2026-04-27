@@ -725,25 +725,8 @@ def build_prompt(messages):
 
 
 # =====================================================
-# Layout / OCR helpers
+# Text helpers
 # =====================================================
-def is_layout_line(line: str) -> bool:
-    return bool(re.match(r"^[\-\._\s]{5,}$", line))
-
-def clean_ocr_noise(text: str) -> str:
-    cleaned, seen = [], set()
-    for raw in text.split("\n"):
-        line = raw.strip()
-        if not line or is_layout_line(line):
-            continue
-        if len(re.findall(r"[^\W\d_]", line, re.UNICODE)) < 5:
-            continue
-        upper = line.upper()
-        if upper in seen:
-            continue
-        seen.add(upper)
-        cleaned.append(line)
-    return "\n".join(cleaned)
 
 def limit_words(text: str, max_words: int) -> str:
     words = text.split()
@@ -901,12 +884,12 @@ def _chunk_pages_by_tokens(cleaned_pages, max_tokens):
     return chunks
 
 def summarize_all_pages(pages, max_words, system_prompt):
-    # Collect and clean all page texts
+    # Collect all page texts
     cleaned_pages = []
     for p in pages:
-        cleaned = clean_ocr_noise(p["text"])
-        if cleaned and len(re.findall(r"[^\W\d_]", cleaned, re.UNICODE)) > 20:
-            cleaned_pages.append(cleaned)
+        text = (p["text"] or "").strip()
+        if text and len(re.findall(r"[^\W\d_]", text, re.UNICODE)) > 20:
+            cleaned_pages.append(text)
 
     if not cleaned_pages:
         log("ERROR: No valid text found for summary")
